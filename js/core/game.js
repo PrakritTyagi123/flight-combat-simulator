@@ -18,6 +18,7 @@ import { GameLoop } from './gameLoop.js';
 import { Engine } from './engine.js';
 import { InputManager } from '../input/inputManager.js';
 import { Actions } from '../input/controlBindings.js';
+import { CameraManager } from '../camera/cameraManager.js';
 
 // ─── Game Class ──────────────────────────────────────────────────────────────
 export class Game {
@@ -152,7 +153,20 @@ export class Game {
             // ── Step 8: Set up the initial scene (a simple demo scene) ───
             this._setupDemoScene();
 
-            // ── Step 9: Start the game loop ──────────────────────────────
+            // ── Step 9: Initialize Camera Manager ────────────────────────
+            this.cameraManager = new CameraManager(this.input, this.engine);
+            if (this.playerAircraft) {
+                this.cameraManager.init(this.playerAircraft);
+            }
+
+            // Hook camera manager into window resize
+            this.engine.onResizeCallback = (viewport) => {
+                if (this.cameraManager) {
+                    this.cameraManager.updateAspect(viewport.aspect);
+                }
+            };
+
+            // ── Step 10: Start the game loop ─────────────────────────────
             this.gameLoop.start();
 
             // ── Step 10: Transition to MENU (or PLAYING for testing) ─────
@@ -252,6 +266,12 @@ export class Game {
 
             // Process deferred scene removals
             this.sceneManager.processPendingRemovals();
+
+            // Flush input per-frame buffers AFTER all systems (update + lateUpdate)
+            // have had a chance to read wasTriggered/wasReleased
+            if (this.input) {
+                this.input.flush();
+            }
         });
     }
 
@@ -352,11 +372,6 @@ export class Game {
             if (this.debugUI && this.options.debug) {
                 this.debugUI.update(dt);
             }
-        }
-
-        // ── Flush input per-frame buffers (ALWAYS, even when paused) ─────
-        if (this.input) {
-            this.input.flush();
         }
     }
 
@@ -635,6 +650,7 @@ export class Game {
                         <div id="hud-pos">Pos: --</div>
                         <div id="hud-speed">Speed: --</div>
                         <div id="hud-alt">Alt: --</div>
+                        <div id="hud-camera" style="color:#88aaff;">Camera: chase</div>
                         <div style="margin-top:6px;border-top:1px solid #224;padding-top:6px;">
                             <div id="hud-throttle-label" style="margin-bottom:2px;">Throttle: 50%</div>
                             <div style="width:100%;height:6px;background:#112;border-radius:3px;overflow:hidden;">
@@ -662,6 +678,9 @@ export class Game {
                         <span style="color:#889;">Shift/Ctrl</span> Throttle &nbsp;|&nbsp;
                         <span style="color:#889;">Q/E</span> Rudder &nbsp;|&nbsp;
                         <span style="color:#889;">Space</span> Fire &nbsp;|&nbsp;
+                        <span style="color:#889;">C</span> Camera &nbsp;|&nbsp;
+                        <span style="color:#889;">Alt</span> Freelook &nbsp;|&nbsp;
+                        <span style="color:#889;">V</span> Look Back &nbsp;|&nbsp;
                         <span style="color:#889;">ESC</span> Pause &nbsp;|&nbsp;
                         <span style="color:#889;">~</span> Debug
                     </div>`;
@@ -740,6 +759,19 @@ export class Game {
             }
         } else {
             if (speedEl) speedEl.textContent = `Speed: -- kts`;
+        }
+
+        // Camera mode
+        const camEl = document.getElementById('hud-camera');
+        if (camEl && this.cameraManager) {
+            const mode = this.cameraManager.getMode();
+            const info = this.cameraManager.getDebugInfo();
+            const detail = info.activeController;
+            let extra = '';
+            if (detail.freelook) extra = ' [FREELOOK]';
+            if (detail.lookBack) extra = ' [LOOK BACK]';
+            if (mode === 'cinematic' && detail.shot) extra = ` [${detail.shot}]`;
+            camEl.textContent = `Camera: ${mode.toUpperCase()}${extra}`;
         }
     }
 
@@ -874,21 +906,10 @@ export class Game {
             aircraft.position.y = 5;
         }
 
-        // ── Chase Camera ─────────────────────────────────────────────────
-        // Simple third-person camera that follows the aircraft (until Camera Manager in Part 3)
-        const cam = this.engine.getCamera();
-        const behind = new THREE.Vector3(-40, 12, 0); // Behind and above in local space
-        behind.applyQuaternion(aircraft.quaternion);
-        const desiredPos = aircraft.position.clone().add(behind);
-
-        // Smooth follow
-        cam.position.lerp(desiredPos, 5.0 * dt);
-
-        // Look slightly ahead of the aircraft
-        const lookAhead = new THREE.Vector3(30, 0, 0);
-        lookAhead.applyQuaternion(aircraft.quaternion);
-        const lookTarget = aircraft.position.clone().add(lookAhead);
-        cam.lookAt(lookTarget);
+        // ── Pass speed to camera manager for dynamic effects ─────────────
+        if (this.cameraManager) {
+            this.cameraManager.setTargetSpeed(this._speed);
+        }
     }
 
     // ─── Default Game Data ───────────────────────────────────────────────────
@@ -994,6 +1015,7 @@ export class Game {
             scene: this.sceneManager?.getDebugInfo(),
             assets: this.assetLoader.getDebugInfo(),
             input: this.input?.getDebugInfo(),
+            camera: this.cameraManager?.getDebugInfo(),
             gameData: {
                 aircraftCount: Object.keys(this.gameData.aircraftStats || {}).length,
                 weaponCount: Object.keys(this.gameData.weaponStats || {}).length,
@@ -1026,6 +1048,7 @@ export class Game {
 
         this.gameLoop.dispose();
         this.input?.dispose();
+        this.cameraManager?.dispose();
         this.sceneManager?.dispose();
         this.engine?.dispose();
         this.assetLoader.dispose();

@@ -257,6 +257,11 @@ export class Engine {
             this.renderer.setSize(this.viewport.width, this.viewport.height);
         }
 
+        // Notify external resize listeners
+        if (this.onResizeCallback) {
+            this.onResizeCallback(this.viewport);
+        }
+
         console.log(`[Engine] Resized to ${this.viewport.width}x${this.viewport.height}`);
     }
 
