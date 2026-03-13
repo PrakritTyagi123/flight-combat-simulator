@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Combat Simulator</title>
+    <style>
+        /* ─── Reset & Base ──────────────────────────────────────────── */
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Courier New', monospace;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+
+        #game-canvas {
+            display: block;
+        }
+
+        /* ─── Selection prevention during gameplay ──────────────────── */
+        body.playing {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* ─── Cursor hiding during gameplay ─────────────────────────── */
+        body.playing #game-container {
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+    <!-- Main game container — the Three.js canvas is injected here -->
+    <div id="game-container"></div>
+
+    <!--
+        Import Map: Map bare specifiers to CDN URLs.
+        This lets us write `import * as THREE from 'three'`
+        in our ES6 modules without a bundler.
+    -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <!-- Bootstrap the game -->
+    <script type="module">
+        import { Game } from './js/core/game.js';
+
+        // Wait for DOM then boot
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const game = new Game({
+                    containerId: 'game-container',
+                    debug: false
+                });
+
+                await game.init();
+
+                console.log('─────────────────────────────────────');
+                console.log('Game ready! Open console and type:');
+                console.log('  game.getDebugInfo()    — system status');
+                console.log('  game.state.getState()  — current state');
+                console.log('  game.gameLoop.getMetrics() — FPS');
+                console.log('─────────────────────────────────────');
+
+            } catch (err) {
+                console.error('Failed to initialize game:', err);
+            }
+        });
+    </script>
+</body>
+</html>
