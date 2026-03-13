@@ -16,6 +16,8 @@ import { SceneManager, RenderLayers } from './sceneManager.js';
 import { AssetLoader, AssetType } from './assetLoader.js';
 import { GameLoop } from './gameLoop.js';
 import { Engine } from './engine.js';
+import { InputManager } from '../input/inputManager.js';
+import { Actions } from '../input/controlBindings.js';
 
 // ─── Game Class ──────────────────────────────────────────────────────────────
 export class Game {
@@ -131,10 +133,14 @@ export class Game {
             this.engine = new Engine(this.container, this.sceneManager);
             this.engine.init();
 
-            // ── Step 4: Register state callbacks ─────────────────────────
+            // ── Step 4: Initialize Input System ──────────────────────────
+            this.input = new InputManager(this.state, this.engine.getCanvas());
+            this.input.init();
+
+            // ── Step 5: Register state callbacks ─────────────────────────
             this._registerStateCallbacks();
 
-            // ── Step 5: Wire up the Game Loop ────────────────────────────
+            // ── Step 6: Wire up the Game Loop ────────────────────────────
             this._setupGameLoop();
 
             // ── Step 6: Transition to LOADING state ──────────────────────
@@ -291,45 +297,66 @@ export class Game {
      * @param {number} elapsed - Total elapsed time
      */
     _update(dt, elapsed) {
-        // Input polling (Part 2) — always active for menu navigation too
+        // Input polling — always active for menu navigation too
         if (this.input) {
             this.input.update(dt);
+
+            // ── Global actions (work in any state) ───────────────────────
+            if (this.input.wasTriggered(Actions.PAUSE)) {
+                if (this.state.is(GameStates.PLAYING)) {
+                    this.state.setState(GameStates.PAUSED);
+                } else if (this.state.is(GameStates.PAUSED)) {
+                    this.state.setState(GameStates.PLAYING);
+                }
+            }
+
+            if (this.input.wasTriggered(Actions.DEBUG_TOGGLE)) {
+                this.options.debug = !this.options.debug;
+                console.log(`[Game] Debug mode: ${this.options.debug}`);
+            }
         }
 
         // Only update gameplay systems when playing
-        if (!this.state.is(GameStates.PLAYING)) return;
+        if (this.state.is(GameStates.PLAYING)) {
+            // ── Input-driven aircraft control (temporary until full physics) ──
+            if (this.input && this.playerAircraft) {
+                this._applyInputToAircraft(dt);
+            }
 
-        // Weather / environment update
-        if (this.weather) {
-            this.weather.update(dt);
+            // Weather / environment update
+            if (this.weather) {
+                this.weather.update(dt);
+            }
+
+            // World / terrain streaming
+            if (this.world) {
+                this.world.update(dt, this.engine.getCamera().position);
+            }
+
+            // Effects update (particles, explosions)
+            if (this.effects) {
+                this.effects.update(dt);
+            }
+
+            // Audio update (3D positioning)
+            if (this.audio) {
+                this.audio.update(dt, this.engine.getCamera());
+            }
+
+            // HUD update
+            if (this.hud) {
+                this.hud.update(dt);
+            }
+
+            // Debug overlay
+            if (this.debugUI && this.options.debug) {
+                this.debugUI.update(dt);
+            }
         }
 
-        // World / terrain streaming
-        if (this.world) {
-            this.world.update(dt, this.engine.getCamera().position);
-        }
-
-        // Effects update (particles, explosions)
-        if (this.effects) {
-            this.effects.update(dt);
-        }
-
-        // Audio update (3D positioning)
-        if (this.audio) {
-            this.audio.update(dt, this.engine.getCamera());
-        }
-
-        // HUD update
-        if (this.hud) {
-            this.hud.update(dt);
-        }
-
-        // Animation system
-        // (future: tweenManager, aircraftAnimations)
-
-        // Debug overlay
-        if (this.debugUI && this.options.debug) {
-            this.debugUI.update(dt);
+        // ── Flush input per-frame buffers (ALWAYS, even when paused) ─────
+        if (this.input) {
+            this.input.flush();
         }
     }
 
@@ -598,27 +625,52 @@ export class Game {
                 el = document.createElement('div');
                 el.id = 'game-hud';
                 el.innerHTML = `
+                    <!-- Top-left: Flight data -->
                     <div style="position:fixed;top:10px;left:10px;z-index:800;
                         font-family:'Courier New',monospace;color:#00ff88;font-size:12px;
                         background:rgba(0,0,0,0.5);padding:10px;border-radius:4px;
-                        pointer-events:none;">
+                        pointer-events:none;min-width:260px;">
                         <div id="hud-fps">FPS: --</div>
                         <div id="hud-state">State: --</div>
                         <div id="hud-pos">Pos: --</div>
                         <div id="hud-speed">Speed: --</div>
                         <div id="hud-alt">Alt: --</div>
+                        <div style="margin-top:6px;border-top:1px solid #224;padding-top:6px;">
+                            <div id="hud-throttle-label" style="margin-bottom:2px;">Throttle: 50%</div>
+                            <div style="width:100%;height:6px;background:#112;border-radius:3px;overflow:hidden;">
+                                <div id="hud-throttle-bar" style="width:50%;height:100%;background:#00ff88;border-radius:3px;transition:width 0.1s;"></div>
+                            </div>
+                        </div>
                     </div>
+                    <!-- Top-right: Input axes -->
+                    <div id="hud-input-panel" style="position:fixed;top:10px;right:10px;z-index:800;
+                        font-family:'Courier New',monospace;color:#88aaff;font-size:11px;
+                        background:rgba(0,0,0,0.5);padding:10px;border-radius:4px;
+                        pointer-events:none;min-width:180px;">
+                        <div style="color:#556;margin-bottom:4px;">── INPUT ──</div>
+                        <div id="hud-pitch">Pitch: 0.00</div>
+                        <div id="hud-roll">Roll: 0.00</div>
+                        <div id="hud-yaw">Yaw: 0.00</div>
+                        <div id="hud-device" style="margin-top:6px;color:#556;">Device: keyboard</div>
+                        <div id="hud-actions" style="margin-top:4px;color:#446;font-size:10px;word-break:break-all;"></div>
+                    </div>
+                    <!-- Bottom center: Controls hint -->
                     <div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-                        z-index:800;font-family:'Courier New',monospace;color:#889;
-                        font-size:11px;pointer-events:none;">
-                        [ESC] Pause &nbsp;|&nbsp; [C] Camera &nbsp;|&nbsp; [~] Debug
+                        z-index:800;font-family:'Courier New',monospace;color:#667;
+                        font-size:11px;pointer-events:none;text-align:center;">
+                        <span style="color:#889;">WASD</span> Fly &nbsp;|&nbsp;
+                        <span style="color:#889;">Shift/Ctrl</span> Throttle &nbsp;|&nbsp;
+                        <span style="color:#889;">Q/E</span> Rudder &nbsp;|&nbsp;
+                        <span style="color:#889;">Space</span> Fire &nbsp;|&nbsp;
+                        <span style="color:#889;">ESC</span> Pause &nbsp;|&nbsp;
+                        <span style="color:#889;">~</span> Debug
                     </div>`;
                 document.body.appendChild(el);
             }
             el.style.display = 'block';
 
             // Start HUD update interval
-            this._hudInterval = setInterval(() => this._updateHUD(), 200);
+            this._hudInterval = setInterval(() => this._updateHUD(), 100);
         } else {
             if (el) el.style.display = 'none';
             if (this._hudInterval) {
@@ -650,7 +702,45 @@ export class Game {
             if (posEl) posEl.textContent = `Pos: ${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}`;
             if (altEl) altEl.textContent = `Alt: ${p.y.toFixed(0)}m`;
         }
-        if (speedEl) speedEl.textContent = `Speed: 0 kts`; // Placeholder until physics
+
+        // Input-driven readouts
+        if (this.input) {
+            const throttle = this.input.getThrottle();
+            const speed = this._speed || 0;
+            const kts = (speed * 1.944).toFixed(0); // m/s → knots
+            if (speedEl) speedEl.textContent = `Speed: ${kts} kts | Thr: ${(throttle * 100).toFixed(0)}%`;
+
+            // Throttle bar
+            const thrBar = document.getElementById('hud-throttle-bar');
+            const thrLabel = document.getElementById('hud-throttle-label');
+            if (thrBar) {
+                const pct = (throttle * 100).toFixed(0);
+                thrBar.style.width = pct + '%';
+                // Color: green < 80%, orange 80-95%, red 95%+ (afterburner)
+                thrBar.style.background = throttle > 0.95 ? '#ff4444' : throttle > 0.8 ? '#ffaa00' : '#00ff88';
+            }
+            if (thrLabel) thrLabel.textContent = `Throttle: ${(throttle * 100).toFixed(0)}%`;
+
+            // Input axes
+            const pitchEl = document.getElementById('hud-pitch');
+            const rollEl = document.getElementById('hud-roll');
+            const yawEl = document.getElementById('hud-yaw');
+            const deviceEl = document.getElementById('hud-device');
+            const actionsEl = document.getElementById('hud-actions');
+
+            if (pitchEl) pitchEl.textContent = `Pitch: ${this.input.getAxis('pitch').toFixed(2)}`;
+            if (rollEl)  rollEl.textContent  = `Roll:  ${this.input.getAxis('roll').toFixed(2)}`;
+            if (yawEl)   yawEl.textContent   = `Yaw:   ${this.input.getAxis('yaw').toFixed(2)}`;
+            if (deviceEl) deviceEl.textContent = `Device: ${this.input.lastActiveDevice}${this.input.isPointerLocked() ? ' [locked]' : ''}`;
+
+            // Show currently active actions
+            if (actionsEl) {
+                const kbActions = Array.from(this.input.keyboard.activeActions);
+                actionsEl.textContent = kbActions.length > 0 ? kbActions.join(', ') : '';
+            }
+        } else {
+            if (speedEl) speedEl.textContent = `Speed: -- kts`;
+        }
     }
 
     /**
@@ -723,55 +813,82 @@ export class Game {
 
     /**
      * Transition from menu to playing state
-     * (Simplified for Part 1 — later parts add map/plane selection flow)
+     * (Simplified — later parts add map/plane selection flow)
      */
     startPlaying() {
         // Force transition since we're skipping MAP_SELECT and PLANE_SELECT for now
         this.state.forceState(GameStates.PLAYING);
 
-        // Set up keyboard listener for pause (temporary — replaced by InputManager later)
-        if (!this._keyListener) {
-            this._keyListener = (e) => {
-                if (e.key === 'Escape') {
-                    if (this.state.is(GameStates.PLAYING)) {
-                        this.state.setState(GameStates.PAUSED);
-                    } else if (this.state.is(GameStates.PAUSED)) {
-                        this.state.setState(GameStates.PLAYING);
-                    }
-                }
-            };
-            window.addEventListener('keydown', this._keyListener);
+        // Initialize flight velocity for demo movement
+        if (!this._flightVelocity) {
+            this._flightVelocity = new THREE.Vector3(0, 0, 0);
+            this._speed = 80; // Starting speed m/s
         }
-
-        // Simple demo: orbit the camera around the aircraft
-        this._startDemoOrbit();
     }
 
     /**
-     * Demo camera orbit for testing (Part 1 only)
+     * Apply input axes to the placeholder aircraft (temporary until full physics Part 3).
+     * Provides immediate, tangible flight response so the input system can be tested.
      * @private
+     * @param {number} dt - Delta time
      */
-    _startDemoOrbit() {
-        // Override the variable update to orbit the camera around the aircraft
-        const originalUpdate = this.gameLoop.onUpdate;
-        this.gameLoop.setUpdate((dt, elapsed) => {
-            // Call original update chain
-            if (originalUpdate) originalUpdate(dt, elapsed);
+    _applyInputToAircraft(dt) {
+        const aircraft = this.playerAircraft;
+        if (!aircraft) return;
 
-            // Orbit camera
-            if (this.playerAircraft && this.state.is(GameStates.PLAYING)) {
-                const cam = this.engine.getCamera();
-                const target = this.playerAircraft.position;
-                const radius = 60;
-                const speed = 0.3;
-                const height = 25;
+        // Read composite axes from the input manager
+        const pitch = this.input.getAxis('pitch');
+        const roll  = this.input.getAxis('roll');
+        const yaw   = this.input.getAxis('yaw');
+        const throttle = this.input.getThrottle();
 
-                cam.position.x = target.x + Math.cos(elapsed * speed) * radius;
-                cam.position.z = target.z + Math.sin(elapsed * speed) * radius;
-                cam.position.y = target.y + height + Math.sin(elapsed * 0.5) * 10;
-                cam.lookAt(target);
-            }
-        });
+        // Rotation rates (radians/second)
+        const pitchRate = 1.8;
+        const rollRate  = 3.0;
+        const yawRate   = 1.2;
+
+        // For our aircraft model facing +X (right-hand coordinate system):
+        //   Pitch = rotation around local Z axis (positive Z-rot = nose UP)
+        //   Roll  = rotation around local X axis (positive X-rot = roll RIGHT / clockwise from behind)
+        //   Yaw   = rotation around local Y axis (positive Y-rot = nose LEFT)
+        //
+        // Axis values: W held → PITCH_DOWN active → pitch axis = +1 → we want nose DOWN
+        //              S held → PITCH_UP active   → pitch axis = -1 → we want nose UP
+        //              A held → ROLL_LEFT active  → roll axis = -1  → we want roll LEFT
+        //              D held → ROLL_RIGHT active → roll axis = +1  → we want roll RIGHT
+
+        aircraft.rotateZ(-pitch * pitchRate * dt);     // Pitch: +axis = nose down (negative Z rotation)
+        aircraft.rotateX(roll * rollRate * dt);         // Roll:  +axis = roll right (positive X rotation)
+        aircraft.rotateY(-yaw * yawRate * dt);          // Yaw:   +axis = nose right (negative Y rotation)
+
+        // Speed from throttle (20–200 m/s range for demo)
+        this._speed = 20 + throttle * 180;
+
+        // Move forward in the aircraft's local forward direction (+X for our model)
+        const forward = new THREE.Vector3(1, 0, 0);
+        forward.applyQuaternion(aircraft.quaternion);
+        aircraft.position.addScaledVector(forward, this._speed * dt);
+
+        // Prevent going underground
+        if (aircraft.position.y < 5) {
+            aircraft.position.y = 5;
+        }
+
+        // ── Chase Camera ─────────────────────────────────────────────────
+        // Simple third-person camera that follows the aircraft (until Camera Manager in Part 3)
+        const cam = this.engine.getCamera();
+        const behind = new THREE.Vector3(-40, 12, 0); // Behind and above in local space
+        behind.applyQuaternion(aircraft.quaternion);
+        const desiredPos = aircraft.position.clone().add(behind);
+
+        // Smooth follow
+        cam.position.lerp(desiredPos, 5.0 * dt);
+
+        // Look slightly ahead of the aircraft
+        const lookAhead = new THREE.Vector3(30, 0, 0);
+        lookAhead.applyQuaternion(aircraft.quaternion);
+        const lookTarget = aircraft.position.clone().add(lookAhead);
+        cam.lookAt(lookTarget);
     }
 
     // ─── Default Game Data ───────────────────────────────────────────────────
@@ -876,6 +993,7 @@ export class Game {
             gameLoop: this.gameLoop.getDebugInfo(),
             scene: this.sceneManager?.getDebugInfo(),
             assets: this.assetLoader.getDebugInfo(),
+            input: this.input?.getDebugInfo(),
             gameData: {
                 aircraftCount: Object.keys(this.gameData.aircraftStats || {}).length,
                 weaponCount: Object.keys(this.gameData.weaponStats || {}).length,
@@ -907,15 +1025,11 @@ export class Game {
         console.log('[Game] Shutting down...');
 
         this.gameLoop.dispose();
+        this.input?.dispose();
         this.sceneManager?.dispose();
         this.engine?.dispose();
         this.assetLoader.dispose();
         this.state.dispose();
-
-        // Remove keyboard listener
-        if (this._keyListener) {
-            window.removeEventListener('keydown', this._keyListener);
-        }
 
         // Remove UI elements
         ['loading-screen', 'main-menu', 'game-hud', 'pause-menu'].forEach(id => {

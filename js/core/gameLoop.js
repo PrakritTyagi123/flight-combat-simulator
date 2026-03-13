@@ -254,15 +254,20 @@ export class GameLoop {
             }
 
             this.metrics.updateTime = performance.now() - updateStart;
+        }
 
-            // ─── Variable Update ─────────────────────────────────────────
-            this.elapsedTime += rawDelta;
+        // ─── Variable Update ─────────────────────────────────────────
+        // ALWAYS called, even when paused, so that input polling and
+        // pause/unpause detection work correctly. Game systems inside
+        // _update() gate themselves on game state.
+        this.elapsedTime += rawDelta;
 
-            if (this.onUpdate) {
-                this.onUpdate(rawDelta, this.elapsedTime);
-            }
+        if (this.onUpdate) {
+            this.onUpdate(rawDelta, this.elapsedTime);
+        }
 
-            // ─── Late Update ─────────────────────────────────────────────
+        // ─── Late Update ─────────────────────────────────────────────
+        if (!this.paused) {
             if (this.onLateUpdate) {
                 this.onLateUpdate(rawDelta);
             }
